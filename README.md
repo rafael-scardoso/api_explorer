@@ -3,6 +3,7 @@
 Interface gráfica (Tkinter) para testar APIs hidrometeorológicas. Uma aba por API.
 
 ## Como rodar
+    Atualização: Inserido atalho para rodar direto.
     pip install -r requirements.txt
     python app.py
 No Linux, se faltar o Tkinter: `sudo apt install python3-tk`.
