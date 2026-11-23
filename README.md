@@ -3,7 +3,6 @@
 Interface gráfica (Tkinter) para testar APIs hidrometeorológicas. Uma aba por API.
 
 ## Como rodar
-    Atualização: Inserido atalho para rodar direto.
     pip install -r requirements.txt
     python app.py
 No Linux, se faltar o Tkinter: `sudo apt install python3-tk`.
@@ -33,8 +32,11 @@ No Linux, se faltar o Tkinter: `sudo apt install python3-tk`.
   Use **Anterior** e **Próxima** para navegar pelas tabelas longas. **Exportar CSV** salva todas as
   linhas da tabela selecionada que correspondem ao filtro, incluindo as demais páginas. Para baixar
   o período completo, deixe o filtro vazio. O ERA5 tem dados desde 1940 e atraso de cerca de cinco dias.
-- **ANA · Listar estações** mostra município, UF, latitude, longitude, código e nome da bacia
-  das estações do inventário. A consulta usa as credenciais da ANA e o filtro selecionado.
+- **ANA · Listar estações** usa o catálogo local `ana_estacoes.csv`. Se o arquivo ainda
+  não existir, clique em **Baixar catálogo** uma vez. O botão coleta o inventário público do
+  [SNIRH](https://portal1.snirh.gov.br/server/rest/services/Esta%C3%A7%C3%B5es_Hidrometeorol%C3%B3gicas_SNIRH/FeatureServer/0)
+  sem token. Escolha **Bacia hidrográfica** para filtrar a tabela sem internet. Use
+  **Atualizar catálogo** quando quiser substituir o arquivo por uma coleta nova.
 - **REINDESC · Consulta manual** explica os formatos aceitos no formulário HTTP. Os nomes e
   valores dos parâmetros dependem da rota informada.
 
@@ -42,9 +44,8 @@ Em **Mostrar opções avançadas** ficam parâmetros como variáveis do Open-Met
 tipo de data da ANA e endereço da especificação OpenAPI. **Consulta manual**
 abre o formulário com método, URL, parâmetros, cabeçalhos e corpo.
 
-Na ANA, o inventário já abre com UF RS. Para buscar uma estação ou bacia sem
-filtro estadual, deixe a UF vazia. As séries exigem o código da estação e trazem
-o intervalo preenchido. A autenticação usa os dados informados no topo da aba.
+Na ANA, copie o código da estação do inventário para consultar uma série. O intervalo
+já vem preenchido. A autenticação usa os dados informados no topo da aba.
 No REINDESC, **Consultar portal** abre uma consulta à página pública.
 
 ## Recursos
@@ -57,12 +58,11 @@ No REINDESC, **Consultar portal** abre uma consulta à página pública.
 - A URL final, os cabeçalhos sensíveis exibidos e os parâmetros de autenticação na URL do cURL são mascarados.
 
 ## Observações
-- O inventário da ANA exige UF, código da estação ou código da bacia; o formulário já traz a UF RS. As séries exigem código da estação, tipo de filtro e intervalo.
 - OpenZenith usa `openzenith.org` por padrão; o endereço anterior continua disponível no seletor.
 - Defesa Civil RS: limite de 120 req/min por IP; dados atualizam a cada 5 min.
 - Open-Meteo gratuito: uso não comercial (600/min, 5.000/h, <10.000/dia), dados CC BY 4.0.
 - ANA: token vale ~60 min (o manual cita 15 min no exemplo); evite autenticar à toa (risco de bloqueio de IP). HTTP 429: aguarde ~90 s.
-- O PDF incluído acompanha a edição original. Para os endereços padrão e os formulários revisados, vale este README.
+- O manual em PDF apresenta os formulários atuais e inclui um exemplo de 10 anos no Open-Meteo.
 
 ## Testes
 `python tests/smoke_test.py` usa Tkinter simulado e um servidor HTTP local (sem rede externa).

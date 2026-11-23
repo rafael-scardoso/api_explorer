@@ -27,7 +27,7 @@ SECRET_HEADERS = {"authorization", "proxy-authorization", "senha", "identificado
                   "accesstoken", "x-api-key", "api-key", "cookie", "set-cookie"}
 SECRET_QUERY = {"apikey", "api_key", "api-key", "access_token", "token", "senha"}
 SECRET_QUERY_VALUE = re.compile(r"([?&])([^=&\s?#]+)=[^&#\s\"']*")
-ANA_TOKEN_KEYS = {"tokenautenticacao", "access_token", "accesstoken", "token"}
+ANA_TOKEN_KEYS = ("tokenautenticacao", "access_token", "accesstoken", "token")
 
 
 # --------------------------------------------------------------------------
@@ -996,6 +996,7 @@ def make_openzenith_specs(get_base: Callable[[], str], on_loaded: Callable[[dict
 ANA_BASE = "https://www.ana.gov.br/hidrowebservice"
 ANA_AUTH_PATH = "/EstacoesTelemetricas/OAUth/v1"
 ANA_OPENAPI_PATH = "/api-docs/Vers%C3%A3o%20-%20v1.0.3984.2"
+ANA_INVENTORY_SPEC = "Inventário de estações"
 
 
 def ana_inventory_table(data: Any) -> dict:
@@ -1012,19 +1013,27 @@ def ana_inventory_table(data: Any) -> dict:
 
 
 def find_token(data: Any) -> Optional[str]:
+    for key in ANA_TOKEN_KEYS:
+        token = _find_ana_token_field(data, key)
+        if token:
+            return token
+    return None
+
+
+def _find_ana_token_field(data: Any, key: str) -> Optional[str]:
     if isinstance(data, dict):
         for k, v in data.items():
-            if k.lower() in ANA_TOKEN_KEYS and isinstance(v, str) and v.strip():
-                return v
-        for v in data.values():
-            r = find_token(v)
-            if r:
-                return r
+            if k.lower() == key and isinstance(v, str) and v.strip():
+                return v.strip()
+        children = data.values()
     elif isinstance(data, list):
-        for v in data:
-            r = find_token(v)
-            if r:
-                return r
+        children = data
+    else:
+        return None
+    for child in children:
+        token = _find_ana_token_field(child, key)
+        if token:
+            return token
     return None
 
 
@@ -1050,21 +1059,16 @@ def make_ana_specs(get_base: Callable[[], str], on_loaded: Callable[[dict], None
             raise ValueError("Preencha Identificador e Senha na área de autenticação.")
         return ana_auth_request(base, path, ident, senha)
 
-    inventory_fields = [
-        Field("UnidadeFederativa", "UF", "RS", "combo",
-              tuple("AC AL AM AP BA CE DF ES GO MA MG MS MT PA PB PE PI PR RJ RN RO RR RS SC SE SP TO".split())),
-        Field("CodigoDaEstacao", "Código da estação"),
-        Field("CodigoDaBacia", "Código da bacia"),
-    ]
+    inventory_uf = Field("UnidadeFederativa", "UF", "RS", "combo",
+                         tuple("AC AL AM AP BA CE DF ES GO MA MG MS MT PA PB PE PI PR RJ RN RO RR RS SC SE SP TO".split()),
+                         required=True)
 
     def build_inventory(values: dict) -> PreparedRequest:
-        params = {f.key: values[f.key].strip() for f in inventory_fields if values[f.key].strip()}
-        if not params:
-            raise ValueError("Informe a UF, o código da estação ou o código da bacia.")
-        if "UnidadeFederativa" in params:
-            params["UnidadeFederativa"] = params["UnidadeFederativa"].upper()
+        uf = values.get(inventory_uf.key, "").strip().upper()
+        if uf not in inventory_uf.choices:
+            raise ValueError("Selecione uma UF válida para listar as estações.")
         return PreparedRequest("GET", join_base(get_base(), "/EstacoesTelemetricas/HidroInventarioEstacoes/v1"),
-                               params=params, postprocess=ana_inventory_table)
+                               params={inventory_uf.key: uf}, postprocess=ana_inventory_table)
 
     def series_spec(label: str, description: str, suffix: str, interval: str) -> RequestSpec:
         intervals = ("MINUTO_5", "MINUTO_10", "MINUTO_15", "MINUTO_30",
@@ -1095,9 +1099,8 @@ def make_ana_specs(get_base: Callable[[], str], on_loaded: Callable[[dict], None
                     "(headers) e guarda o tokenautenticacao. As demais requisições usam o token automaticamente.",
                     [], build_auth, button="Autenticar"),
         make_openapi_loader_spec(get_base, ANA_OPENAPI_PATH, (ANA_OPENAPI_PATH, "/v3/api-docs", "/v2/api-docs"), on_loaded),
-        RequestSpec("Inventário de estações", "Lista cidade, coordenadas e código de bacia das estações. "
-                    "Informe UF, código de estação ou código de bacia.",
-                    inventory_fields, build_inventory, button="Listar estações"),
+        RequestSpec(ANA_INVENTORY_SPEC, "Selecione uma bacia para ver suas estações no catálogo local.",
+                    [inventory_uf], build_inventory, button="Listar estações"),
         series_spec("Adotada", "Consulta os dados adotados da estação.", "Adotada", "DIAS_30"),
         series_spec("Detalhada", "Inclui dados brutos e adotados. O período máximo é de 30 dias.",
                     "Detalhada", "DIAS_7"),

@@ -21,6 +21,7 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("Tkinter não encontrado. No Linux instale com:  sudo apt install python3-tk")
 
+import ana_catalog
 import api_core as core
 from api_core import HttpResult, PreparedRequest, RequestSpec
 
@@ -181,17 +182,21 @@ class ResultPanel(ttk.Frame):
         self._set_text(self.req_text, text)
         self.nb.select(2)
 
-    def show(self, res: HttpResult, curl_text: str, extra: dict | None = None, *, paginate: bool = False) -> None:
+    def show(self, res: HttpResult, curl_text: str, extra: dict | None = None, *,
+             paginate: bool = False, local: bool = False) -> None:
         self.result = res
         self.paginate = paginate
-        self.status.configure(text=res.summary(), foreground=("#b00020" if (res.error or not res.ok) else "#1b6e1b"))
+        status = res.summary() if not local or res.error else res.note
+        failed = res.error or (not local and not res.ok)
+        self.status.configure(text=status, foreground="#b00020" if failed else "#1b6e1b")
 
         hdrs = "\n".join(
             f"{k}: {'***' if k.lower() in core.SECRET_HEADERS else core.mask_query_secrets(v)}"
             for k, v in res.resp_headers.items()
         )
         final_url = core.mask_query_secrets(res.final_url)
-        self._set_text(self.req_text, f"{curl_text}\n\n--- URL final ---\n{final_url}\n\n--- Headers da resposta ---\n{hdrs}")
+        request_text = curl_text if local else f"{curl_text}\n\n--- URL final ---\n{final_url}\n\n--- Headers da resposta ---\n{hdrs}"
+        self._set_text(self.req_text, request_text)
 
         if res.data is not None:
             body = json.dumps(res.data, ensure_ascii=False, indent=2)
@@ -357,6 +362,7 @@ class ApiTab(ttk.Frame):
         self.form.pack(fill="x", pady=6)
 
         btns = ttk.Frame(self)
+        self.request_buttons = btns
         btns.pack(fill="x")
         self.run_btn = ttk.Button(btns, text="Executar", command=self.on_run)
         self.run_btn.pack(side="left")
@@ -588,6 +594,18 @@ class OpenZenithTab(ApiTab):
 class AnaTab(ApiTab):
     title = "ANA HidroWebService"
 
+    def __init__(self, master, app):
+        super().__init__(master, app)
+        self.catalog_rows = None
+        self.catalog_bar = ttk.Frame(self)
+        ttk.Label(self.catalog_bar, text="Bacia hidrográfica").pack(side="left")
+        self.basin = ttk.Combobox(self.catalog_bar, state="readonly", width=42)
+        self.basin.pack(side="left", padx=8)
+        self.basin.bind("<<ComboboxSelected>>", lambda _: self.show_catalog())
+        self.catalog_download = ttk.Button(self.catalog_bar, text="Baixar catálogo",
+                                           command=self.download_catalog)
+        self.catalog_download.pack(side="left")
+
     def build_top(self, parent):
         box = ttk.LabelFrame(parent, text="ANA HidroWebService - autenticação (identificador e senha recebidos da ANA)")
         box.pack(fill="x")
@@ -630,6 +648,90 @@ class AnaTab(ApiTab):
         return core.make_ana_specs(
             lambda: self.base_var.get(), self.install_openapi,
             lambda: (self.base_var.get(), self.auth_path_var.get(), self.id_var.get().strip(), self.pw_var.get()))
+
+    def is_catalog_selected(self):
+        return self.current_spec().name == core.ANA_INVENTORY_SPEC
+
+    def render_selected(self):
+        if hasattr(self, "catalog_bar") and not self.is_catalog_selected():
+            self.catalog_bar.pack_forget()
+            self.request_buttons.pack(before=self.panel, fill="x")
+            self.form.pack(before=self.request_buttons, fill="x", pady=6)
+        super().render_selected()
+        if not hasattr(self, "catalog_bar") or not self.is_catalog_selected():
+            return
+        self.form.pack_forget()
+        self.request_buttons.pack_forget()
+        self.catalog_bar.pack(before=self.panel, fill="x", pady=6)
+        if self.catalog_rows is None:
+            try:
+                self.catalog_rows = ana_catalog.load_catalog()
+            except FileNotFoundError:
+                self.show_catalog_error("Clique em Baixar catálogo para salvar a lista no computador.")
+                return
+            except (OSError, ValueError) as exc:
+                self.show_catalog_error(str(exc))
+                return
+        self.show_catalog()
+
+    def show_catalog_error(self, message):
+        self.panel.show(HttpResult(error=message), ana_catalog.SOURCE, local=True)
+
+    def show_catalog(self):
+        if self.catalog_rows is None:
+            return
+        self.catalog_download.configure(text="Atualizar catálogo")
+        basins = (ana_catalog.ALL_BASINS, *sorted({ana_catalog.basin_label(row) for row in self.catalog_rows}))
+        self.basin.configure(values=basins)
+        selected = self.basin.get()
+        if selected not in basins:
+            self.basin.current(0)
+            selected = ana_catalog.ALL_BASINS
+        stations = self.catalog_rows if selected == ana_catalog.ALL_BASINS else [
+            row for row in self.catalog_rows if ana_catalog.basin_label(row) == selected
+        ]
+        columns = list(ana_catalog.FIELDS)
+        table = ([col.replace("_", " ") for col in columns], [[row[col] for col in columns] for row in stations])
+        tables = {"Estações ANA": table}
+        result = HttpResult(data=stations, tables=tables, note=f"Catálogo local · {len(stations)} estações")
+        self.panel.show(result, ana_catalog.SOURCE, tables, paginate=True, local=True)
+
+    def download_catalog(self):
+        self.catalog_download.configure(state="disabled")
+        self.panel.status.configure(text="Baixando catálogo público do SNIRH…", foreground="#444444")
+        finished = queue.Queue()
+
+        def work():
+            try:
+                finished.put((ana_catalog.download_catalog(), ""))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                finished.put((None, f"Falha ao baixar o catálogo do SNIRH: {exc}"))
+
+        def check():
+            try:
+                rows, error = finished.get_nowait()
+            except queue.Empty:
+                self.after(100, check)
+                return
+            self.catalog_download.configure(state="normal")
+            if rows is not None:
+                self.catalog_rows = rows
+            if self.is_catalog_selected():
+                if error:
+                    self.panel.status.configure(text=error, foreground="#b00020")
+                else:
+                    self.show_catalog()
+
+        threading.Thread(target=work, daemon=True).start()
+        self.after(100, check)
+
+    def on_run(self):
+        if not self.is_catalog_selected():
+            super().on_run()
+
+    def on_preview(self):
+        if not self.is_catalog_selected():
+            super().on_preview()
 
     def install_openapi(self, spec: dict) -> None:
         dyn = core.specs_from_openapi(spec, lambda: self.base_var.get())

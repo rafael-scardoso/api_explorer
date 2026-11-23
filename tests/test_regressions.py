@@ -49,6 +49,14 @@ class HttpRegressionTests(unittest.TestCase):
         self.assertFalse(out.ok)
         self.assertIn("OpenAPI", out.error)
 
+    def test_ana_inventory_lists_by_uf_only(self):
+        spec = core.make_ana_specs(lambda: core.ANA_BASE, lambda spec: None, lambda: ())[2]
+        self.assertEqual([field.key for field in spec.fields], ["UnidadeFederativa"])
+        self.assertEqual(spec.fields[0].initial(), "RS")
+        self.assertEqual(spec.build({"UnidadeFederativa": " sc "}).params, {"UnidadeFederativa": "SC"})
+        with self.assertRaisesRegex(ValueError, "UF"):
+            spec.build({"UnidadeFederativa": "XX"})
+
     def test_ana_filters_required(self):
         specs = core.make_ana_specs(lambda: core.ANA_BASE, lambda spec: None, lambda: ())
         for index, field in ((2, "UnidadeFederativa"), (3, "CodigoDaEstacao"), (4, "CodigoDaEstacao")):
@@ -77,13 +85,32 @@ class AnaRegressionTests(unittest.TestCase):
 
     @patch("app.core.do_request")
     def test_auth_payload_masks_token_but_keeps_it_for_session(self, send):
-        payload = {"items": {"tokenautenticacao": "private-token", "tokenType": "Bearer"}}
+        payload = {"token": "outer-token",
+                   "items": {"token": "other-token", "tokenautenticacao": " private-token ", "tokenType": "Bearer"}}
         send.return_value = core.HttpResult(status=200, data=payload, text=json.dumps(payload))
         result = AnaTab._fetch_token(None, self.settings)
         self.assertEqual(result.new_token, "private-token")
         self.assertNotIn("private-token", result.text)
+        self.assertNotIn("other-token", result.text)
+        self.assertNotIn("outer-token", result.text)
         self.assertEqual(result.data["items"]["tokenautenticacao"], "***")
         self.assertEqual(result.data["items"]["tokenType"], "Bearer")
+
+    @patch("app.core.do_request")
+    def test_inventory_sends_tokenautenticacao_as_bearer(self, send):
+        tab = object.__new__(AnaTab)
+        send.side_effect = [
+            core.HttpResult(status=200, data={"items": {"token": "other-token", "tokenautenticacao": "ana-token"}}),
+            core.HttpResult(status=200, data={"items": []}),
+        ]
+        spec = core.make_ana_specs(lambda: core.ANA_BASE, lambda spec: None, lambda: ())[2]
+        req = spec.build({"UnidadeFederativa": "RS"})
+        result = tab.execute(req, {**self.settings, "token": ""})
+        self.assertTrue(result.ok)
+        self.assertEqual(result.new_token, "ana-token")
+        sent = send.call_args_list[1].args[0]
+        self.assertEqual(sent.headers["Authorization"], "Bearer ana-token")
+        self.assertEqual(sent.params, {"UnidadeFederativa": "RS"})
 
 
 class StationCatalogueTests(unittest.TestCase):
